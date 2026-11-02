@@ -1,0 +1,63 @@
+services:
+  mongo1:
+    image: mongo:7
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo1_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mongo2:
+    image: mongo:7
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo2_data:/data/db
+
+  mongo3:
+    image: mongo:7
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo3_data:/data/db
+
+  mongo-init:
+    image: mongo:7
+    depends_on:
+      mongo1:
+        condition: service_healthy
+      mongo2:
+        condition: service_started
+      mongo3:
+        condition: service_started
+    restart: "no"
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        until mongosh --host mongo1:27017 --quiet --eval 'db.adminCommand({ping:1}).ok' >/dev/null 2>&1 &&
+        mongosh --host mongo2:27017 --quiet --eval 'db.adminCommand({ping:1}).ok' >/dev/null 2>&1 &&
+        mongosh --host mongo3:27017 --quiet --eval 'db.adminCommand({ping:1}).ok' >/dev/null 2>&1;
+        do sleep 2; done;
+        mongosh --host mongo1:27017 --quiet --eval 'try { rs.conf() } catch(e) { rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo1:27017"}, {_id: 1, host: "mongo2:27017"}, {_id: 2, host: "mongo3:27017"}]}) }'
+
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    environment:
+      SPRING_DATA_MONGODB_URI: "mongodb://mongo1:27017,mongo2:27017,mongo3:27017/studentdb?replicaSet=rs0"
+
+volumes:
+  mongo1_data:
+  mongo2_data:
+  mongo3_data:
